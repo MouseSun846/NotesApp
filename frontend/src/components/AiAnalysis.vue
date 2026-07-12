@@ -6,6 +6,56 @@
         <span v-if="isAnalyzing" class="ai-typing-badge">分析生成中...</span>
       </div>
       <div class="pane-actions">
+        <!-- Style Dropdown Selector -->
+        <div class="style-selector-container">
+          <button 
+            class="btn-style-selector" 
+            @click="toggleStyleDropdown"
+            :disabled="isAnalyzing"
+            title="选择总结风格"
+          >
+            <span class="style-icon">🎨</span>
+            <span class="style-name">{{ currentTemplateName }}</span>
+            <span class="style-arrow">▼</span>
+          </button>
+          
+          <div v-if="showStyleDropdown" class="style-dropdown-menu">
+            <div class="dropdown-header">选择总结风格</div>
+            <div class="dropdown-items">
+              <div 
+                v-for="tpl in templates" 
+                :key="tpl.id" 
+                :class="['dropdown-item', { active: tpl.id === props.templateId }]"
+                @click="selectStyle(tpl.id)"
+              >
+                <div class="item-meta">
+                  <span class="item-name">{{ tpl.name }}</span>
+                  <span :class="['item-badge', tpl.is_builtin ? 'badge-builtin' : 'badge-custom']">
+                    {{ tpl.is_builtin ? '内置' : '自定义' }}
+                  </span>
+                </div>
+                <div class="item-desc">{{ tpl.description }}</div>
+              </div>
+            </div>
+            <div class="dropdown-footer">
+              <button class="btn-manage-templates" @click="openTemplateManager">
+                ⚙️ 管理总结模板...
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Copy Button -->
+        <button 
+          v-if="summary"
+          class="btn-text-action" 
+          @click="copySummary"
+          title="复制分析内容（不含思考过程）"
+          style="margin-right: 12px;"
+        >
+          📋 {{ copyTextSummary }}
+        </button>
+
         <button 
           v-if="!isAnalyzing && summary"
           class="btn-text-action mr-3" 
@@ -16,7 +66,7 @@
         </button>
         <button 
           class="btn-text-action" 
-          @click="$emit('regenerate-analysis')" 
+          @click="triggerRegenerate" 
           :disabled="isAnalyzing"
           style="margin-right: 12px;"
         >
@@ -92,11 +142,126 @@
         ></div>
       </div>
     </div>
+
+    <!-- Template Management Modal -->
+    <div v-if="showTemplateManager" class="template-manager-modal" @click.self="closeTemplateManager">
+      <div class="modal-card">
+        <div class="modal-header">
+          <h3 class="modal-title">⚙️ 总结模板管理</h3>
+          <button class="close-modal-btn" @click="closeTemplateManager">✕</button>
+        </div>
+        
+        <div class="modal-body">
+          <!-- Left: Templates List -->
+          <div class="templates-sidebar">
+            <div class="sidebar-section-title">内置模板</div>
+            <div class="templates-list-group">
+              <div 
+                v-for="tpl in builtinTemplates" 
+                :key="tpl.id" 
+                :class="['sidebar-item', { active: activeModalTpl && activeModalTpl.id === tpl.id }]"
+                @click="selectModalTemplate(tpl)"
+              >
+                <span class="tpl-name">{{ tpl.name }}</span>
+              </div>
+            </div>
+            
+            <div class="sidebar-section-title" style="margin-top: 1.5rem;">自定义模板</div>
+            <div class="templates-list-group">
+              <div v-if="customTemplates.length === 0" class="empty-item">暂无自定义模板</div>
+              <div 
+                v-for="tpl in customTemplates" 
+                :key="tpl.id" 
+                :class="['sidebar-item', { active: activeModalTpl && activeModalTpl.id === tpl.id }]"
+                @click="selectModalTemplate(tpl)"
+              >
+                <span class="tpl-name">{{ tpl.name }}</span>
+              </div>
+            </div>
+            
+            <button class="btn-create-tpl" @click="initNewTemplate">
+              ➕ 新建自定义模板
+            </button>
+          </div>
+          
+          <!-- Right: Template Editor -->
+          <div class="template-editor-pane">
+            <div v-if="activeModalTpl" class="editor-form">
+              <div class="form-header">
+                <span class="editor-pane-title">
+                  {{ isNewTemplate ? '新建自定义模板' : activeModalTpl.is_builtin ? '查看内置模板' : '编辑自定义模板' }}
+                </span>
+                <div class="form-actions" v-if="activeModalTpl.is_builtin">
+                  <button class="btn-clone-tpl" @click="cloneBuiltinTemplate(activeModalTpl)">
+                    📥 复制为自定义模板
+                  </button>
+                </div>
+              </div>
+              
+              <div class="form-group">
+                <label class="form-label">模板名称</label>
+                <input 
+                  type="text" 
+                  v-model="editTplForm.name" 
+                  :disabled="activeModalTpl.is_builtin"
+                  placeholder="例如：极简技术周报"
+                  class="form-input"
+                />
+              </div>
+              
+              <div class="form-group">
+                <label class="form-label">模板描述</label>
+                <input 
+                  type="text" 
+                  v-model="editTplForm.description" 
+                  :disabled="activeModalTpl.is_builtin"
+                  placeholder="简述该模板的特点和适用场景..."
+                  class="form-input"
+                />
+              </div>
+              
+              <div class="form-group flex-grow">
+                <label class="form-label">系统提示词 (System Prompt)</label>
+                <textarea 
+                  v-model="editTplForm.system_prompt" 
+                  :disabled="activeModalTpl.is_builtin"
+                  placeholder="请详细描述大模型需要遵守的角色定位、生成格式和分析要求。支持要求大模型生成 Mermaid 思维导图或 ECharts 图表（须严格为合法的 JSON 对象）。"
+                  class="form-textarea"
+                ></textarea>
+              </div>
+
+              <!-- Prompt Guidelines Help Block -->
+              <div class="guidelines-card">
+                <div class="guidelines-title">💡 格式与指令建议</div>
+                <div class="guidelines-content">
+                  <p>1. 如果需要<strong>思维导图</strong>，请在提示词中要求模型输出类似 <code>```mermaid\nmindmap\n  root((主题))\n    分支\n```</code> 的结构，并确保缩进（推荐2个空格）正确且没有包含括号以外的其他特殊字符。</p>
+                  <p>2. 如果需要<strong>数据图表</strong>，请让模型输出 <code>```echarts\n{ ... }\n```</code> 的结构，其中包裹的内容必须是<strong>严格合法的 JSON 对象</strong>，不要有 JavaScript 函数或注释。</p>
+                </div>
+              </div>
+              
+              <div class="form-footer" v-if="!activeModalTpl.is_builtin">
+                <button class="btn-save" @click="saveActiveTemplate" :disabled="isSavingTpl">
+                  {{ isSavingTpl ? '保存中...' : '保存模板' }}
+                </button>
+                <button v-if="!isNewTemplate" class="btn-delete" @click="deleteActiveTemplate" :disabled="isSavingTpl">
+                  删除模板
+                </button>
+              </div>
+            </div>
+            
+            <div v-else class="editor-placeholder">
+              <span class="placeholder-icon">📋</span>
+              <p>请在左侧选择模板以查看详情或进行编辑</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
 <script setup>
-import { ref, computed, watch, nextTick, onBeforeUnmount } from 'vue'
+import { ref, computed, watch, nextTick, onBeforeUnmount, onMounted } from 'vue'
 import { marked } from 'marked'
 import mermaid from 'mermaid'
 import * as echarts from 'echarts'
@@ -109,10 +274,18 @@ const props = defineProps({
   isAnalyzing: {
     type: Boolean,
     default: false
+  },
+  templateId: {
+    type: String,
+    default: 'standard'
+  },
+  apiBase: {
+    type: String,
+    default: 'http://localhost:8010'
   }
 })
 
-const emit = defineEmits(['update-summary', 'regenerate-analysis'])
+const emit = defineEmits(['update-summary', 'regenerate-analysis', 'update-template-id'])
 
 const isEditing = ref(false)
 const isFullscreen = ref(false)
@@ -123,6 +296,222 @@ const toggleEdit = () => {
 
 const toggleFullscreen = () => {
   isFullscreen.value = !isFullscreen.value
+}
+
+// State variables for styles & templates
+const templates = ref([])
+const showStyleDropdown = ref(false)
+const showTemplateManager = ref(false)
+
+const customTemplates = computed(() => templates.value.filter(t => !t.is_builtin))
+const builtinTemplates = computed(() => templates.value.filter(t => t.is_builtin))
+
+const currentTemplateName = computed(() => {
+  const activeTpl = templates.value.find(t => t.id === props.templateId)
+  return activeTpl ? activeTpl.name : '标准会议纪要'
+})
+
+// Active template inside modal editor
+const activeModalTpl = ref(null)
+const isNewTemplate = ref(false)
+const isSavingTpl = ref(false)
+const editTplForm = ref({
+  name: '',
+  description: '',
+  system_prompt: ''
+})
+
+// Fetch templates from API
+const fetchTemplates = async () => {
+  try {
+    const res = await fetch(`${props.apiBase}/api/templates`)
+    if (res.ok) {
+      templates.value = await res.json()
+    }
+  } catch (err) {
+    console.error('Failed to fetch templates:', err)
+  }
+}
+
+// Watch for props load to trigger initial templates fetch
+watch(() => props.apiBase, () => {
+  fetchTemplates()
+}, { immediate: true })
+
+// Dropdown handlers
+const toggleStyleDropdown = () => {
+  showStyleDropdown.value = !showStyleDropdown.value
+}
+
+const selectStyle = (tplId) => {
+  showStyleDropdown.value = false
+  emit('update-template-id', tplId)
+  emit('regenerate-analysis', tplId)
+}
+
+const triggerRegenerate = () => {
+  emit('regenerate-analysis', props.templateId)
+}
+
+// Click outside helper
+const handleGlobalClick = (e) => {
+  if (showStyleDropdown.value && !e.target.closest('.style-selector-container')) {
+    showStyleDropdown.value = false
+  }
+}
+
+// Modal handlers
+const openTemplateManager = () => {
+  showStyleDropdown.value = false
+  showTemplateManager.value = true
+  // Select the active template by default
+  const active = templates.value.find(t => t.id === props.templateId)
+  if (active) {
+    selectModalTemplate(active)
+  } else if (templates.value.length > 0) {
+    selectModalTemplate(templates.value[0])
+  }
+}
+
+const closeTemplateManager = () => {
+  showTemplateManager.value = false
+  activeModalTpl.value = null
+  isNewTemplate.value = false
+}
+
+const selectModalTemplate = (tpl) => {
+  activeModalTpl.value = tpl
+  isNewTemplate.value = false
+  editTplForm.value = {
+    name: tpl.name,
+    description: tpl.description || '',
+    system_prompt: tpl.system_prompt
+  }
+}
+
+const initNewTemplate = () => {
+  isNewTemplate.value = true
+  activeModalTpl.value = { id: '', is_builtin: false }
+  editTplForm.value = {
+    name: '',
+    description: '',
+    system_prompt: ''
+  }
+}
+
+const cloneBuiltinTemplate = (tpl) => {
+  isNewTemplate.value = true
+  activeModalTpl.value = { id: '', is_builtin: false }
+  editTplForm.value = {
+    name: tpl.name + ' - 副本',
+    description: tpl.description || '',
+    system_prompt: tpl.system_prompt
+  }
+}
+
+const saveActiveTemplate = async () => {
+  if (!editTplForm.value.name.trim()) {
+    alert('请输入模板名称')
+    return
+  }
+  if (!editTplForm.value.system_prompt.trim()) {
+    alert('请输入系统提示词')
+    return
+  }
+  
+  isSavingTpl.value = true
+  try {
+    let url = `${props.apiBase}/api/templates`
+    let method = 'POST'
+    
+    if (!isNewTemplate.value && activeModalTpl.value) {
+      url = `${props.apiBase}/api/templates/${activeModalTpl.value.id}`
+      method = 'PUT'
+    }
+    
+    const res = await fetch(url, {
+      method,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: editTplForm.value.name,
+        description: editTplForm.value.description,
+        system_prompt: editTplForm.value.system_prompt
+      })
+    })
+    
+    if (res.ok) {
+      const saved = await res.json()
+      await fetchTemplates()
+      selectModalTemplate(saved)
+      alert('模板保存成功！')
+    } else {
+      const err = await res.json()
+      alert('保存失败: ' + (err.detail || '未知错误'))
+    }
+  } catch (err) {
+    alert('保存出错，请检查网络连接')
+    console.error(err)
+  } finally {
+    isSavingTpl.value = false
+  }
+}
+
+const deleteActiveTemplate = async () => {
+  if (!activeModalTpl.value || activeModalTpl.value.is_builtin) return
+  if (!confirm('确定删除此自定义模板吗？')) return
+  
+  isSavingTpl.value = true
+  try {
+    const res = await fetch(`${props.apiBase}/api/templates/${activeModalTpl.value.id}`, {
+      method: 'DELETE'
+    })
+    if (res.ok) {
+      alert('模板已删除')
+      await fetchTemplates()
+      if (templates.value.length > 0) {
+        selectModalTemplate(templates.value[0])
+      } else {
+        activeModalTpl.value = null
+      }
+    } else {
+      const err = await res.json()
+      alert('删除失败: ' + (err.detail || '未知错误'))
+    }
+  } catch (err) {
+    alert('删除出错')
+    console.error(err)
+  } finally {
+    isSavingTpl.value = false
+  }
+}
+
+onMounted(() => {
+  document.addEventListener('click', handleGlobalClick)
+  fetchTemplates()
+})
+
+const copyTextSummary = ref('复制分析')
+const copySummary = async () => {
+  let textToCopy = props.summary || ''
+  
+  // Strip completed think blocks
+  textToCopy = textToCopy.replace(/<think>[\s\S]*?<\/think>/g, '').trim()
+  
+  // Strip any remaining uncompleted think block
+  if (textToCopy.includes('<think>')) {
+    const idx = textToCopy.indexOf('<think>')
+    textToCopy = textToCopy.substring(0, idx).trim()
+  }
+
+  try {
+    await navigator.clipboard.writeText(textToCopy)
+    copyTextSummary.value = '已复制 ✓'
+    setTimeout(() => {
+      copyTextSummary.value = '复制分析'
+    }, 2000)
+  } catch (err) {
+    console.error('Failed to copy AI summary:', err)
+  }
 }
 
 // Configure marked custom renderer to compile mermaid and echarts codeblocks to custom element wrappers
@@ -392,6 +781,7 @@ watch([renderedBodyHtml, () => props.isAnalyzing, isEditing], () => {
 
 onBeforeUnmount(() => {
   cleanupEcharts()
+  document.removeEventListener('click', handleGlobalClick)
 })
 
 // Expose cleanup method so parent can trigger it on note selection change
@@ -838,5 +1228,525 @@ defineExpose({
 
 @keyframes spin {
   100% { transform: rotate(360deg); }
+}
+
+/* Style Selector and Dropdown */
+.style-selector-container {
+  position: relative;
+  display: inline-block;
+  margin-right: 12px;
+}
+
+.btn-style-selector {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border);
+  color: var(--text-light);
+  padding: 0.4rem 0.85rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  border-radius: 8px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  transition: all 0.2s ease;
+}
+
+.btn-style-selector:hover:not(:disabled) {
+  background: var(--border);
+  border-color: var(--text-muted);
+}
+
+.btn-style-selector:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.style-name {
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.style-arrow {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  transition: transform 0.2s ease;
+}
+
+.style-selector-container:focus-within .style-arrow {
+  transform: rotate(180deg);
+}
+
+.style-dropdown-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  width: 280px;
+  background-color: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  animation: dropdown-in 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+@keyframes dropdown-in {
+  from { opacity: 0; transform: translateY(-8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.dropdown-header {
+  padding: 0.75rem 1rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.dropdown-items {
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.dropdown-item {
+  padding: 0.75rem 1rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.02);
+}
+
+.dropdown-item:hover {
+  background-color: rgba(255, 255, 255, 0.04);
+}
+
+.dropdown-item.active {
+  background-color: rgba(99, 102, 241, 0.1);
+  border-left: 3px solid var(--primary);
+}
+
+.item-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.25rem;
+}
+
+.item-name {
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: var(--text-light);
+}
+
+.dropdown-item.active .item-name {
+  color: var(--primary);
+}
+
+.item-badge {
+  font-size: 0.7rem;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-weight: 500;
+}
+
+.badge-builtin {
+  background-color: rgba(99, 102, 241, 0.15);
+  color: var(--primary);
+  border: 1px solid rgba(99, 102, 241, 0.2);
+}
+
+.badge-custom {
+  background-color: rgba(16, 185, 129, 0.15);
+  color: var(--success);
+  border: 1px solid rgba(16, 185, 129, 0.2);
+}
+
+.item-desc {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  line-height: 1.3;
+}
+
+.dropdown-footer {
+  padding: 0.5rem;
+  background-color: rgba(0, 0, 0, 0.1);
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.btn-manage-templates {
+  width: 100%;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  padding: 0.5rem;
+  font-size: 0.8rem;
+  cursor: pointer;
+  border-radius: 6px;
+  transition: all 0.2s ease;
+  text-align: center;
+}
+
+.btn-manage-templates:hover {
+  background-color: rgba(255, 255, 255, 0.05);
+  color: var(--text-light);
+}
+
+/* Template Manager Modal */
+.template-manager-modal {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(8px);
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: modal-fade-in 0.25s ease;
+}
+
+@keyframes modal-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.modal-card {
+  width: 850px;
+  height: 600px;
+  background-color: var(--bg-sidebar);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.6);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  animation: modal-card-in 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+@keyframes modal-card-in {
+  from { opacity: 0; transform: scale(0.95) translateY(15px); }
+  to { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+.modal-header {
+  padding: 1.25rem 1.5rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.modal-title {
+  margin: 0;
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: var(--text-light);
+}
+
+.close-modal-btn {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 1.2rem;
+  cursor: pointer;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  transition: all 0.2s ease;
+}
+
+.close-modal-btn:hover {
+  background-color: rgba(255, 255, 255, 0.05);
+  color: var(--text-light);
+}
+
+.modal-body {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+}
+
+.templates-sidebar {
+  width: 260px;
+  border-right: 1px solid rgba(255, 255, 255, 0.05);
+  padding: 1.25rem;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  background-color: rgba(0, 0, 0, 0.1);
+}
+
+.sidebar-section-title {
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: 0.5rem;
+  letter-spacing: 0.05em;
+}
+
+.templates-list-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.sidebar-item {
+  padding: 0.6rem 0.85rem;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  transition: all 0.2s ease;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.sidebar-item:hover {
+  background-color: rgba(255, 255, 255, 0.04);
+  color: var(--text-light);
+}
+
+.sidebar-item.active {
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.15), rgba(168, 85, 247, 0.1));
+  border: 1px solid rgba(99, 102, 241, 0.3);
+  color: var(--text-light);
+  font-weight: 600;
+  box-shadow: 0 4px 12px rgba(99, 102, 241, 0.1);
+}
+
+.empty-item {
+  padding: 0.6rem 0.85rem;
+  font-size: 0.8rem;
+  color: rgba(255, 255, 255, 0.15);
+  font-style: italic;
+}
+
+.btn-create-tpl {
+  margin-top: 1.5rem;
+  background: linear-gradient(135deg, var(--primary), #a855f7);
+  color: #fff;
+  border: none;
+  padding: 0.65rem 1rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  flex-shrink: 0;
+}
+
+.btn-create-tpl:hover {
+  opacity: 0.9;
+  transform: translateY(-1px);
+}
+
+.template-editor-pane {
+  flex: 1;
+  padding: 1.5rem;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  background-color: var(--bg-dark);
+}
+
+.editor-form {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  height: 100%;
+}
+
+.form-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.25rem;
+  flex-shrink: 0;
+}
+
+.editor-pane-title {
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--text-light);
+}
+
+.btn-clone-tpl {
+  background-color: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border);
+  color: var(--text-light);
+  padding: 0.4rem 0.85rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.btn-clone-tpl:hover {
+  background-color: rgba(255, 255, 255, 0.1);
+  border-color: var(--text-muted);
+}
+
+.form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.form-group.flex-grow {
+  flex-grow: 1;
+  min-height: 180px;
+}
+
+.form-label {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.form-input {
+  background-color: var(--bg-card);
+  border: 1px solid var(--border);
+  color: var(--text-light);
+  padding: 0.6rem 0.85rem;
+  font-size: 0.88rem;
+  border-radius: 8px;
+  outline: none;
+  transition: border-color 0.2s ease;
+}
+
+.form-input:focus:not(:disabled) {
+  border-color: var(--primary);
+}
+
+.form-input:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  background-color: rgba(255, 255, 255, 0.02);
+}
+
+.form-textarea {
+  flex: 1;
+  background-color: var(--bg-card);
+  border: 1px solid var(--border);
+  color: var(--text-light);
+  padding: 0.75rem 1rem;
+  font-size: 0.85rem;
+  font-family: 'Fira Code', 'Courier New', Courier, monospace;
+  border-radius: 8px;
+  outline: none;
+  resize: none;
+  min-height: 140px;
+  transition: border-color 0.2s ease;
+  line-height: 1.5;
+}
+
+.form-textarea:focus:not(:disabled) {
+  border-color: var(--primary);
+}
+
+.form-textarea:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+  background-color: rgba(255, 255, 255, 0.01);
+}
+
+.guidelines-card {
+  background-color: rgba(99, 102, 241, 0.05);
+  border: 1px solid rgba(99, 102, 241, 0.15);
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+
+.guidelines-title {
+  color: var(--primary);
+  font-weight: 700;
+  margin-bottom: 0.25rem;
+}
+
+.guidelines-content p {
+  margin: 0.2rem 0;
+}
+
+.form-footer {
+  display: flex;
+  gap: 0.75rem;
+  margin-top: auto;
+  padding-top: 1rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+  flex-shrink: 0;
+}
+
+.btn-save {
+  background: var(--success);
+  color: #fff;
+  border: none;
+  padding: 0.65rem 1.25rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.btn-save:hover:not(:disabled) {
+  opacity: 0.9;
+  box-shadow: 0 0 15px rgba(16, 185, 129, 0.25);
+}
+
+.btn-save:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.btn-delete {
+  background-color: transparent;
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  color: var(--danger);
+  padding: 0.65rem 1.25rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.btn-delete:hover:not(:disabled) {
+  background-color: rgba(239, 68, 68, 0.1);
+  border-color: var(--danger);
+}
+
+.editor-placeholder {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  gap: 1rem;
+}
+
+.placeholder-icon {
+  font-size: 3rem;
+  opacity: 0.3;
 }
 </style>

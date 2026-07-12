@@ -53,19 +53,29 @@
 
     <!-- Side-by-side Split Editor Pane -->
     <div class="editor-split-container">
-      <!-- Left: AI Analysis Section (Delegated) -->
       <AiAnalysis 
         ref="aiAnalysisRef"
         :summary="localNote.summary" 
         :is-analyzing="isAnalyzing"
+        :template-id="localNote.template_id"
+        :api-base="apiBase"
         @update-summary="onSummaryUpdated"
-        @regenerate-analysis="$emit('regenerate-analysis')"
+        @update-template-id="onTemplateIdUpdated"
+        @regenerate-analysis="onRegenerateAnalysis"
       />
 
       <!-- Right: Original Transcript Section -->
       <div class="split-pane transcript-pane">
         <div class="pane-header">
           <span class="pane-title">📝 录音原文</span>
+          <button 
+            v-if="localNote.content"
+            class="btn-copy-transcript" 
+            @click="copyTranscript" 
+            title="复制录音原文"
+          >
+            📋 {{ copyTextTranscript }}
+          </button>
         </div>
         <textarea 
           v-model="localNote.content" 
@@ -124,6 +134,32 @@ const onNoteChanged = () => {
 const onSummaryUpdated = (newSummary) => {
   localNote.value.summary = newSummary
   emit('update-note', localNote.value)
+}
+
+const onTemplateIdUpdated = (newTemplateId) => {
+  localNote.value.template_id = newTemplateId
+  onNoteChanged()
+}
+
+const onRegenerateAnalysis = (tplId) => {
+  if (tplId) {
+    localNote.value.template_id = tplId
+    onNoteChanged()
+  }
+  emit('regenerate-analysis', localNote.value.template_id || 'standard')
+}
+
+const copyTextTranscript = ref('复制原文')
+const copyTranscript = async () => {
+  try {
+    await navigator.clipboard.writeText(localNote.value.content || '')
+    copyTextTranscript.value = '已复制 ✓'
+    setTimeout(() => {
+      copyTextTranscript.value = '复制原文'
+    }, 2000)
+  } catch (err) {
+    console.error('Failed to copy text:', err)
+  }
 }
 
 // Tag Operations
@@ -441,5 +477,26 @@ defineExpose({
   resize: none;
   font-family: inherit;
   height: 100%;
+}
+
+.btn-copy-transcript {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  padding: 4px 8px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  border-radius: 6px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  transition: all 0.2s ease;
+}
+
+.btn-copy-transcript:hover {
+  background-color: var(--border);
+  color: var(--text-light);
+  border-color: var(--text-muted);
 }
 </style>
