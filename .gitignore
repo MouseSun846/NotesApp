@@ -1,0 +1,10 @@
+__pycache__/
+frontend/node_modules/
+backend/__pycache__/
+task.md
+frontend/dist
+*.log
+backend/data/audios/
+backend/data/uploads/
+backend/data/notes.db
+backend.log
