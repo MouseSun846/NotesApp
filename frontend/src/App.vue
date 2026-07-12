@@ -187,7 +187,7 @@ const selectNote = (note) => {
   // Trigger analysis stream if note is in analyzing state
   const isAnalyzingStatus = note.summary === '✨ AI Agent 正在分析中...'
   if (isAnalyzingStatus) {
-    connectToAnalysisStream(note.id)
+    connectToAnalysisStream(note.id, note.template_id)
   }
 }
 
@@ -245,7 +245,7 @@ const deleteNote = async (id) => {
 // ───────────────────────────────────────────────────────────
 // AI Analysis Stream Handler
 // ───────────────────────────────────────────────────────────
-const connectToAnalysisStream = (noteId) => {
+const connectToAnalysisStream = (noteId, templateId) => {
   if (eventSource) eventSource.close()
   if (noteEditorRef.value) {
     noteEditorRef.value.cleanupEcharts()
@@ -254,7 +254,8 @@ const connectToAnalysisStream = (noteId) => {
   isAnalyzing.value = true
   currentNote.value.summary = ''
 
-  const streamUrl = `${API_BASE}/api/notes/${noteId}/analyze/stream`
+  const tplId = templateId || (currentNote.value ? currentNote.value.template_id : 'standard') || 'standard'
+  const streamUrl = `${API_BASE}/api/notes/${noteId}/analyze/stream?template_id=${tplId}`
   eventSource = new EventSource(streamUrl)
 
   eventSource.onmessage = (event) => {
@@ -295,9 +296,9 @@ const connectToAnalysisStream = (noteId) => {
   }
 }
 
-const regenerateAnalysis = () => {
+const regenerateAnalysis = (templateId) => {
   if (!currentNote.value) return
-  connectToAnalysisStream(currentNote.value.id)
+  connectToAnalysisStream(currentNote.value.id, templateId)
 }
 
 // ───────────────────────────────────────────────────────────

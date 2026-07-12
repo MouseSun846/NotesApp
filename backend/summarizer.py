@@ -9,10 +9,9 @@ from . import config, db
 # ──────────────────────────────────────────────────────────────────────
 ACTIVE_ANALYSES: set = set()
 
-async def stream_analysis_safe(note_id: str, text: str):
+async def stream_analysis_safe(note_id: str, text: str, template_id: str = None):
     """
-    异步 SSE 生成器：调用本地 LLM 接口，流式生成包含文字总结、
-    Mermaid 思维导图和 ECharts 数据图的统一 Markdown 分析报告。
+    异步 SSE 生成器：调用本地 LLM 接口，流式生成由对应模板定义的会议总结。
 
     事件协议：
       {"event": "token", "token": "<chunk>"}
@@ -37,48 +36,60 @@ async def stream_analysis_safe(note_id: str, text: str):
         try:
             client = AsyncOpenAI(base_url=config.LLM_BASE_URL, api_key="ollama")
             
-            system_prompt = (
-                "你是一个极为专业的会议记录分析助手。你的任务是将录音转写原文整理成一篇格式精美、结构清晰、直观生动的智能会议纪要。\n"
-                "你必须将分析结果合成为一个单一的 Markdown 报告，并在报告中融会贯通地嵌入思维导图和数据可视化图表。\n\n"
-                "输出格式要求：\n"
-                "1. ### 📝 会议简述\n"
-                "   [用一段简洁生动的话（100-200字）概括录音核心内容]\n\n"
-                "2. ### 🧠 思维导图\n"
-                "   [使用 ```mermaid 代码块嵌入一个 Mermaid mindmap，梳理内容的层级关系。例如：]\n"
-                "   ```mermaid\n"
-                "   mindmap\n"
-                "     root((核心主题))\n"
-                "       分支1\n"
-                "         细节1a\n"
-                "       分支2\n"
-                "   ```\n"
-                "   [注意：必须确保 Mermaid mindmap 的缩进（建议2空格）和语法完全合法，不要带任何 markdown 代码块外部的多余说明。]\n\n"
-                "3. ### 📊 数据可视化\n"
-                "   [如果会议原文中包含可量化的具体数据（如比例、数值变化、百分比等），请用 ```echarts 代码块嵌入一个合法的 ECharts Option JSON 配置对象，用于进行图表展示。如果原文中没有任何数据或数字，请完全忽略此章节。]\n"
-                "   [ECharts 配置必须是严格合法的 JSON 对象，不含函数和多余的注释，以便前端直接解析。例如：]\n"
-                "   ```echarts\n"
-                "   {\n"
-                "     \"tooltip\": {},\n"
-                "     \"legend\": { \"data\": [\"销售额\"] },\n"
-                "     \"xAxis\": { \"data\": [\"第一季度\", \"第二季度\"] },\n"
-                "     \"yAxis\": {},\n"
-                "     \"series\": [{\n"
-                "       \"name\": \"销售额\",\n"
-                "       \"type\": \"bar\",\n"
-                "       \"data\": [120, 200]\n"
-                "     }]\n"
-                "   }\n"
-                "   ```\n\n"
-                "4. ### 📋 核心内容要点\n"
-                "   - [重点要点一]\n"
-                "   - [重点要点二]\n\n"
-                "5. ### 🎯 待办与行动事项\n"
-                "   - [ ] [待办事项1]\n"
-                "   - [ ] [待办事项2]\n\n"
-                "重要提示：请让所有报告内容与图表自然融为一体。图表必须放置在各自对应的标题下方。"
-            )
+            # Load template from db
+            system_prompt = None
+            resolved_template_id = template_id or "standard"
+            try:
+                template = db.get_template_by_id(resolved_template_id)
+                if template:
+                    system_prompt = template["system_prompt"]
+            except Exception as db_err:
+                print(f"[summarizer] Failed to load template {resolved_template_id} from db: {db_err}")
+                
+            if not system_prompt:
+                # Fallback to hardcoded standard prompt if not found in db
+                system_prompt = (
+                    "你是一个极为专业的会议记录分析助手。你的任务是将录音转写原文整理成一篇格式精美、结构清晰、直观生动的智能会议纪要。\n"
+                    "你必须将分析结果合成为一个单一的 Markdown 报告，并在报告中融会贯通地嵌入思维导图和数据可视化图表。\n\n"
+                    "输出格式要求：\n"
+                    "1. ### 📝 会议简述\n"
+                    "   [用一段简洁生动的话（100-200字）概括录音核心内容]\n\n"
+                    "2. ### 🧠 思维导图\n"
+                    "   [使用 ```mermaid 代码块嵌入一个 Mermaid mindmap，梳理内容的层级关系。例如：]\n"
+                    "   ```mermaid\n"
+                    "   mindmap\n"
+                    "     root((核心主题))\n"
+                    "       分支1\n"
+                    "         细节1a\n"
+                    "       分支2\n"
+                    "   ```\n"
+                    "   [注意：必须确保 Mermaid mindmap 的缩进（建议2空格）和语法完全合法，不要带任何 markdown 代码块外部的多余说明。]\n\n"
+                    "3. ### 📊 数据可视化\n"
+                    "   [如果会议原文中包含可量化的具体数据（如比例、数值变化、百分比等），请用 ```echarts 代码块嵌入一个合法的 ECharts Option JSON 配置对象，用于进行图表展示。如果原文中没有任何数据或数字，请完全忽略此章节。]\n"
+                    "   [ECharts 配置必须是严格合法的 JSON 对象，不含函数和多余的注释，以便前端直接解析。例如：]\n"
+                    "   ```echarts\n"
+                    "   {\n"
+                    "     \"tooltip\": {},\n"
+                    "     \"legend\": { \"data\": [\"销售额\"] },\n"
+                    "     \"xAxis\": { \"data\": [\"第一季度\", \"第二季度\"] },\n"
+                    "     \"yAxis\": {},\n"
+                    "     \"series\": [{\n"
+                    "       \"name\": \"销售额\",\n"
+                    "       \"type\": \"bar\",\n"
+                    "       \"data\": [120, 200]\n"
+                    "     }]\n"
+                    "   }\n"
+                    "   ```\n\n"
+                    "4. ### 📋 核心内容要点\n"
+                    "   - [重点要点一]\n"
+                    "   - [重点要点二]\n\n"
+                    "5. ### 🎯 待办与行动事项\n"
+                    "   - [ ] [待办事项1]\n"
+                    "   - [ ] [待办事项2]\n\n"
+                    "重要提示：请让所有报告内容与图表自然融为一体。图表必须放置在各自对应的标题下方。"
+                )
 
-            user_prompt = f"请根据以下录音转写原文生成智能会议纪要：\n\n{text}"
+            user_prompt = f"请根据以下录音转写原文生成：\n\n{text}"
 
             response_stream = await client.chat.completions.create(
                 model=config.LLM_MODEL,
@@ -124,8 +135,8 @@ async def stream_analysis_safe(note_id: str, text: str):
 
             # 生成完毕，存入数据库 summary 列中
             final_summary = "".join(full_output).strip()
-            db.update_note(note_id, summary=final_summary)
-            print(f"[summarizer] 融合分析完成并存入数据库 note: {note_id}")
+            db.update_note(note_id, summary=final_summary, template_id=resolved_template_id)
+            print(f"[summarizer] 融合分析完成并存入数据库 note: {note_id} using template: {resolved_template_id}")
             
             yield_event({"event": "done"})
 

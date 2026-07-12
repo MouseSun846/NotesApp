@@ -43,6 +43,17 @@ class NoteUpdate(BaseModel):
     content: str = None
     tags: list = None
     summary: str = None
+    template_id: str = None
+
+class TemplateCreate(BaseModel):
+    name: str
+    description: str = ""
+    system_prompt: str
+
+class TemplateUpdate(BaseModel):
+    name: str = None
+    description: str = None
+    system_prompt: str = None
 
 class ConfigUpdate(BaseModel):
     save_audio: bool
@@ -83,38 +94,91 @@ def update_note(note_id: str, note: NoteUpdate):
         title=note.title,
         content=note.content,
         tags=note.tags,
-        summary=note.summary
+        summary=note.summary,
+        template_id=note.template_id
     )
 
 @app.get("/api/notes/{note_id}/analyze/stream")
-async def stream_note_analysis(note_id: str):
-    """主入口：使用 LangChain Agent 并行生成文字总结、思维导图、数据图（SSE 事件流）。"""
+async def stream_note_analysis(note_id: str, template_id: str = None):
+    """主入口：使用 LLM 生成文字总结、思维导图、数据图（SSE 事件流）。"""
     note = db.get_note_by_id(note_id)
     if not note:
         raise HTTPException(status_code=404, detail="Note not found")
 
     # 重置状态
-    db.update_note(note_id, summary="✨ AI Agent 正在分析中...")
+    db.update_note(note_id, summary="✨ AI Agent 正在分析中...", template_id=template_id)
 
     return StreamingResponse(
-        stream_analysis_safe(note_id, note["content"]),
+        stream_analysis_safe(note_id, note["content"], template_id=template_id),
         media_type="text/event-stream"
     )
 
 
 @app.get("/api/notes/{note_id}/summarize/stream")
-async def stream_note_summary(note_id: str):
+async def stream_note_summary(note_id: str, template_id: str = None):
     """向后兼容旧路由，重定向到新的 analyze/stream。"""
     note = db.get_note_by_id(note_id)
     if not note:
         raise HTTPException(status_code=404, detail="Note not found")
 
-    db.update_note(note_id, summary="✨ AI Agent 正在分析中...")
+    db.update_note(note_id, summary="✨ AI Agent 正在分析中...", template_id=template_id)
 
     return StreamingResponse(
-        stream_analysis_safe(note_id, note["content"]),
+        stream_analysis_safe(note_id, note["content"], template_id=template_id),
         media_type="text/event-stream"
     )
+
+# ───────────────────────────────────────────────────────────
+# Templates API
+# ───────────────────────────────────────────────────────────
+
+@app.get("/api/templates")
+def get_templates():
+    return db.get_all_templates()
+
+@app.post("/api/templates")
+def create_template(tpl: TemplateCreate):
+    tpl_id = "custom_" + str(uuid.uuid4())[:8]
+    try:
+        res = db.create_template(
+            template_id=tpl_id,
+            name=tpl.name,
+            description=tpl.description,
+            system_prompt=tpl.system_prompt,
+            is_builtin=False
+        )
+        return res
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.put("/api/templates/{template_id}")
+def update_template(template_id: str, tpl: TemplateUpdate):
+    try:
+        res = db.update_template(
+            template_id=template_id,
+            name=tpl.name,
+            description=tpl.description,
+            system_prompt=tpl.system_prompt
+        )
+        if not res:
+            raise HTTPException(status_code=404, detail="Template not found")
+        return res
+    except ValueError as val_err:
+        raise HTTPException(status_code=400, detail=str(val_err))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/api/templates/{template_id}")
+def delete_template(template_id: str):
+    try:
+        success = db.delete_template(template_id)
+        if not success:
+            raise HTTPException(status_code=404, detail="Template not found")
+        return {"status": "success"}
+    except ValueError as val_err:
+        raise HTTPException(status_code=400, detail=str(val_err))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.delete("/api/notes/{note_id}")
 def delete_note(note_id: str):
@@ -183,12 +247,12 @@ async def upload_audio(file: UploadFile = File(...)):
     UPLOAD_PROGRESS[note_id] = queue
 
     # Launch background transcription + analysis task
-    asyncio.create_task(_process_uploaded_audio(note_id, saved_path, queue))
+    asyncio.create_task(_process_uploaded_audio(note_id, saved_path, queue, "standard"))
 
     return note
 
 
-async def _process_uploaded_audio(note_id: str, file_path: str, queue: asyncio.Queue):
+async def _process_uploaded_audio(note_id: str, file_path: str, queue: asyncio.Queue, template_id: str = "standard"):
     """Background task: transcribe audio file then trigger AI analysis."""
     text = ""
     try:
@@ -207,10 +271,10 @@ async def _process_uploaded_audio(note_id: str, file_path: str, queue: asyncio.Q
 
         # Step 2: AI Analysis
         queue.put_nowait({"event": "analyzing", "message": "转写完成，正在生成 AI 会议纪要..."})
-        db.update_note(note_id, summary="✨ AI Agent 正在分析中...")
+        db.update_note(note_id, summary="✨ AI Agent 正在分析中...", template_id=template_id)
 
         # Stream AI analysis tokens through the queue
-        async for sse_line in stream_analysis_safe(note_id, text):
+        async for sse_line in stream_analysis_safe(note_id, text, template_id=template_id):
             # Parse the SSE data line and forward relevant events
             if sse_line.startswith("data: ") and sse_line.strip() != "data: [DONE]":
                 try:
